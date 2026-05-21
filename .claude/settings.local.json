@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(.venv\\\\Scripts\\\\pip install customtkinter yfinance --quiet)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "PowerShell(.venv\\\\Scripts\\\\pip install matplotlib --quiet)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"import matplotlib; import customtkinter; import yfinance; print\\('All imports OK'\\)\")",
+      "PowerShell(Start-Process -FilePath \".venv\\\\Scripts\\\\pythonw.exe\" -ArgumentList \"main.py\" -WorkingDirectory \"C:\\\\Users\\\\Rsmit\\\\OneDrive\\\\Desktop\\\\_Python_\\\\StockProject\")"
+    ]
+  }
+}
