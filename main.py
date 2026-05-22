@@ -1,6 +1,9 @@
+import json
 import textwrap
 import threading
 from datetime import datetime
+from pathlib import Path
+import tkinter as tk
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -14,6 +17,9 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 DEFAULT_TICKERS = ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"]
+SAVE_FILE = Path(__file__).parent / "watchlist.json"
+
+APP_VERSION = "0.0.1"
 
 MOVER_UNIVERSE = [
     "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD",
@@ -352,6 +358,192 @@ class HistoryWindow(ctk.CTkToplevel):
             self.title(f"{self.ticker} — {name}")
 
 
+# ── About dialog ─────────────────────────────────────────────────────────────
+
+class AboutDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("About Stock Price Viewer")
+        self.geometry("420x320")
+        self.resizable(False, False)
+        self.grab_set()
+
+        self.after(50, self._center)
+        self.after(100, self._pop_to_front)
+
+        ctk.CTkFrame(self, fg_color=BG_HEADER, height=6, corner_radius=0).pack(fill="x")
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=32, pady=20)
+
+        ctk.CTkLabel(
+            body, text="Stock Price Viewer",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(pady=(8, 2))
+
+        ctk.CTkLabel(
+            body, text=f"Version {APP_VERSION}",
+            font=ctk.CTkFont(size=13), text_color=GRAY,
+        ).pack(pady=(0, 16))
+
+        ctk.CTkFrame(body, fg_color=GRID_CLR, height=1).pack(fill="x", pady=(0, 16))
+
+        ctk.CTkLabel(
+            body,
+            text=(
+                "A real-time stock watchlist and price history viewer.\n"
+                "Data provided by Yahoo Finance via yfinance.\n\n"
+                "Built with Python, CustomTkinter, and Matplotlib."
+            ),
+            font=ctk.CTkFont(size=12), text_color=GRAY,
+            justify="center", wraplength=340,
+        ).pack()
+
+        ctk.CTkButton(
+            self, text="Close", width=100,
+            command=self.destroy,
+        ).pack(pady=(0, 20))
+
+    def _center(self):
+        self.update_idletasks()
+        pw, ph = self.master.winfo_width(), self.master.winfo_height()
+        px, py = self.master.winfo_rootx(), self.master.winfo_rooty()
+        w, h   = self.winfo_width(), self.winfo_height()
+        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+    def _pop_to_front(self):
+        self.attributes("-topmost", True)
+        self.lift()
+        self.focus_force()
+        self.after(200, lambda: self.attributes("-topmost", False))
+
+
+# ── Search dialog ────────────────────────────────────────────────────────────
+
+class SearchDialog(ctk.CTkToplevel):
+    def __init__(self, parent, on_add):
+        super().__init__(parent)
+        self._on_add = on_add
+        self._result_rows: list[ctk.CTkFrame] = []
+
+        self.title("Search by Company Name")
+        self.geometry("580x460")
+        self.minsize(480, 360)
+        self.after(50, self._center)
+        self.after(100, self._pop_to_front)
+
+        # ── Search bar ────────────────────────────────────────────────────────
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=16, pady=(16, 6))
+
+        self._entry = ctk.CTkEntry(
+            bar, placeholder_text="Company name  (e.g. Apple, Tesla, Nvidia)",
+            font=ctk.CTkFont(size=13),
+        )
+        self._entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._entry.bind("<Return>", lambda _: self._search())
+        self._entry.focus_set()
+
+        self._search_btn = ctk.CTkButton(bar, text="Search", width=90, command=self._search)
+        self._search_btn.pack(side="left")
+
+        # ── Column header ─────────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=4)
+        hdr.pack(fill="x", padx=16, pady=(0, 2))
+        for text, width in [("Symbol", 90), ("Company Name", 270), ("Type", 90)]:
+            ctk.CTkLabel(
+                hdr, text=text, width=width, anchor="w",
+                font=ctk.CTkFont(size=11, weight="bold"),
+            ).pack(side="left", padx=8, pady=5)
+
+        # ── Results scroll area ───────────────────────────────────────────────
+        self._results_frame = ctk.CTkScrollableFrame(
+            self, fg_color="transparent", corner_radius=0,
+        )
+        self._results_frame.pack(fill="both", expand=True, padx=16)
+
+        # ── Status bar ────────────────────────────────────────────────────────
+        self._status = ctk.CTkLabel(
+            self, text="Type a company name and press Search.",
+            text_color=GRAY, font=ctk.CTkFont(size=11),
+        )
+        self._status.pack(pady=(4, 12))
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _center(self):
+        self.update_idletasks()
+        pw, ph = self.master.winfo_width(), self.master.winfo_height()
+        px, py = self.master.winfo_rootx(), self.master.winfo_rooty()
+        w, h   = self.winfo_width(), self.winfo_height()
+        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+    def _pop_to_front(self):
+        self.attributes("-topmost", True)
+        self.lift()
+        self.focus_force()
+        self.after(200, lambda: self.attributes("-topmost", False))
+
+    def _clear_results(self):
+        for row in self._result_rows:
+            row.destroy()
+        self._result_rows.clear()
+
+    def _search(self):
+        query = self._entry.get().strip()
+        if not query:
+            return
+        self._clear_results()
+        self._search_btn.configure(state="disabled")
+        self._status.configure(text="Searching…")
+        threading.Thread(target=self._fetch, args=(query,), daemon=True).start()
+
+    def _fetch(self, query: str):
+        try:
+            results = yf.Search(query, max_results=15).quotes
+            self.after(0, lambda: self._show_results(results))
+        except Exception as exc:
+            self.after(0, lambda e=exc: self._status.configure(text=f"Error: {e}"))
+        finally:
+            self.after(0, lambda: self._search_btn.configure(state="normal"))
+
+    def _show_results(self, quotes: list):
+        self._clear_results()
+        # filter to equity-like types only
+        keep = [q for q in quotes if q.get("quoteType", "") in
+                ("EQUITY", "ETF", "MUTUALFUND", "INDEX", "CURRENCY", "FUTURE")]
+        if not keep:
+            self._status.configure(text="No results found.")
+            return
+
+        for q in keep:
+            symbol   = q.get("symbol", "")
+            name     = q.get("longname") or q.get("shortname") or "—"
+            qtype    = q.get("quoteType", "—")
+
+            row = ctk.CTkFrame(self._results_frame, fg_color=BG_ROW, corner_radius=5)
+            row.pack(fill="x", pady=2)
+
+            ctk.CTkLabel(row, text=symbol, width=90, anchor="w",
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=8, pady=7)
+            ctk.CTkLabel(row, text=name,   width=270, anchor="w",
+                         font=ctk.CTkFont(size=12),   text_color=GRAY).pack(side="left", padx=4)
+            ctk.CTkLabel(row, text=qtype,  width=90,  anchor="w",
+                         font=ctk.CTkFont(size=11),   text_color=GRAY).pack(side="left", padx=4)
+            ctk.CTkButton(
+                row, text="Add", width=60,
+                command=lambda s=symbol: self._add(s),
+            ).pack(side="right", padx=8, pady=5)
+
+            self._result_rows.append(row)
+
+        self._status.configure(text=f"{len(keep)} result(s) found.")
+
+    def _add(self, symbol: str):
+        self._on_add(symbol)
+        self._status.configure(text=f"{symbol} added to watchlist.")
+
+
 # ── Main app ──────────────────────────────────────────────────────────────────
 
 class StockApp(ctk.CTk):
@@ -363,10 +555,43 @@ class StockApp(ctk.CTk):
         self.tickers: list[str] = []
         self.rows:    dict[str, dict] = {}
         self._mover_rows: list[dict] = []
+        self._build_menu()
         self._build_ui()
-        for t in DEFAULT_TICKERS:
+        for t in self._load_tickers():
             self._add_row(t)
         self.refresh()
+
+    def _build_menu(self):
+        menubar = tk.Menu(
+            self,
+            bg=BG_HEADER, fg="white", activebackground=BG_ROW,
+            activeforeground="white", relief="flat", bd=0,
+        )
+        file_menu = tk.Menu(
+            menubar, tearoff=0,
+            bg=BG_HEADER, fg="white", activebackground=BG_ROW,
+            activeforeground="white", relief="flat",
+        )
+        file_menu.add_command(label="About", command=lambda: AboutDialog(self))
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.destroy)
+        menubar.add_cascade(label="File", menu=file_menu)
+        self.configure(menu=menubar)
+
+    def _load_tickers(self) -> list[str]:
+        try:
+            data = json.loads(SAVE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [str(t).upper() for t in data if t]
+        except Exception:
+            pass
+        return list(DEFAULT_TICKERS)
+
+    def _save_tickers(self):
+        try:
+            SAVE_FILE.write_text(json.dumps(self.tickers), encoding="utf-8")
+        except Exception:
+            pass
 
     def _build_ui(self):
         top_bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -384,6 +609,11 @@ class StockApp(ctk.CTk):
         self.ticker_entry.pack(side="left", padx=(0, 8))
         self.ticker_entry.bind("<Return>", lambda _: self._add_ticker())
         ctk.CTkButton(add_frame, text="Add", width=80, command=self._add_ticker).pack(side="left")
+        ctk.CTkButton(
+            add_frame, text="Search by Name", width=140,
+            fg_color=BG_PANEL, hover_color=BG_ROW,
+            command=self._open_search,
+        ).pack(side="left", padx=(12, 0))
 
         content = ctk.CTkFrame(self, fg_color="transparent")
         content.pack(fill="both", expand=True, padx=16, pady=4)
@@ -475,6 +705,7 @@ class StockApp(ctk.CTk):
                       command=lambda t=ticker: self._remove_ticker(t)).pack(side="left", padx=(2, 4))
 
         self.rows[ticker] = {"frame": row, "labels": lbls}
+        self._save_tickers()
 
     def _remove_ticker(self, ticker: str):
         if ticker in self.rows:
@@ -482,9 +713,20 @@ class StockApp(ctk.CTk):
             del self.rows[ticker]
         if ticker in self.tickers:
             self.tickers.remove(ticker)
+        self._save_tickers()
 
     def _open_history(self, ticker: str):
         HistoryWindow(self, ticker).focus()
+
+    def _open_search(self):
+        SearchDialog(self, on_add=self._add_from_search).focus()
+
+    def _add_from_search(self, symbol: str):
+        symbol = symbol.upper()
+        if symbol in self.rows:
+            return
+        self._add_row(symbol)
+        threading.Thread(target=self._fetch_ticker, args=(symbol,), daemon=True).start()
 
     def _add_ticker(self):
         raw = self.ticker_entry.get().strip().upper()
